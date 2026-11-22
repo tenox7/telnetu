@@ -266,7 +266,68 @@ void vt_reset(void)
 void vt_init(void)
 {
 	vt.charset = CS_AUTO;
+	vt.cols = 80;
+	vt.rows = 24;
 	vt_reset();
+}
+
+static void clr(Cell *c, int n)
+{
+	while (n-- > 0) {
+		c->ch = ' ';
+		c->at = 0;
+		c->fg = c->bg = C_DEF;
+		c++;
+	}
+}
+
+/* a new size. The cells stay where they are, but if the cursor would be
+ * under the new last line, the lines go up so that it stays on it. The
+ * scrolling region becomes the whole screen, as in xterm. */
+void vt_resize(Vt *v, int c, int r)
+{
+	int s, y, d;
+
+	c = c < MINCOLS ? MINCOLS : c > MAXCOLS ? MAXCOLS : c;
+	r = r < MINROWS ? MINROWS : r > MAXROWS ? MAXROWS : r;
+	d = v->y - (r - 1);
+	if (d > 0) {
+		for (y = 0; y + d < v->rows; y++)
+			cpcells(v->buf[v->alt][y], v->buf[v->alt][y + d], MAXCOLS);
+		for (; y < v->rows; y++)
+			clr(v->buf[v->alt][y], MAXCOLS);
+		v->y -= d;
+	}
+	for (s = 0; s < 2; s++)
+		for (y = 0; y < r; y++) {
+			if (y >= v->rows)
+				clr(v->buf[s][y], c);
+			else if (c > v->cols)
+				clr(&v->buf[s][y][v->cols], c - v->cols);
+			/* no wide letter cut in half at the right edge */
+			if (v->buf[s][y][c - 1].ch && c < MAXCOLS &&
+				v->buf[s][y][c].ch == 0 && vt_wide(v->buf[s][y][c - 1].ch))
+				v->buf[s][y][c - 1].ch = ' ';
+		}
+	for (y = v->cols; y < c; y++)
+		v->tabs[y] = y % 8 == 0;
+	v->cols = c;
+	v->rows = r;
+	if (v->x >= c)
+		v->x = c - 1;
+	if (v->y >= r)
+		v->y = r - 1;
+	for (s = 0; s < 2; s++) {
+		if (v->save[s].x >= c)
+			v->save[s].x = c - 1;
+		if (v->save[s].y >= r)
+			v->save[s].y = r - 1;
+	}
+	v->top = 0;
+	v->bot = r - 1;
+	v->wrap = 0;
+	for (y = 0; y < r; y++)
+		v->dirty[y] = 1;
 }
 
 static int zerowidth(unsigned long c)
@@ -872,7 +933,7 @@ static void csi(int f)
 		else if (a == 19)
 			sendnum("\033[9;", ROWS, COLS, "t");
 		else if (a == 14)
-			sendnum("\033[4;", PXH, COLS * CW, "t");
+			sendnum("\033[4;", ROWS * CH, COLS * CW, "t");
 		else if (a == 11)
 			reply("\033[1t");
 		break;

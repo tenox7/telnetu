@@ -6,8 +6,9 @@
  *	kTEXT	type TEXT: \r \n \e \t \s (space) \\ \xHH, ^X is ctrl-X
  *	Kname	a 3B1 key: up down left right home end pgup pgdn ins del
  *		btab exit help redraw f1 ... f16
- *	sFILE	the screen as a PNG, 720 x 288 (SFILE: twice as big)
+ *	sFILE	the screen as a PNG, as big as the window (SFILE: twice as big)
  *	tFILE	the screen as text (UTF-8)
+ *	gCxL	the user resizes the window to C x L cells
  *	q	the end (also the end of the script): Exit, Exit
  * TNSIMLOG, if set, gets the title, prompt and bell lines.
  */
@@ -20,6 +21,7 @@
 #include "tn.h"
 
 int mx, my, mb;
+int d_cols, d_rows;
 
 static char *script, *sp;
 static long waitend;
@@ -35,9 +37,15 @@ static long now(void)
 	return tv.tv_sec * 1000L + tv.tv_usec / 1000;
 }
 
-int d_open(void)
+int d_open(char *ask, int len)
 {
-	char *l = getenv("TNSIMLOG");
+	char *l = getenv("TNSIMLOG"), *h = getenv("TNSIMHOST");
+
+	if (ask) {			/* the host box: TNSIMHOST */
+		snprintf(ask, len, "%s", h ? h : "");
+		if (h && !strcmp(h, "-"))
+			exit(0);	/* the user closed the box */
+	}
 
 	script = getenv("TNSIM");
 	if (!script)
@@ -45,6 +53,26 @@ int d_open(void)
 	sp = script;
 	if (l && *l)
 		logf = fopen(l, "w");
+	return 0;
+}
+
+void d_fit(int bord, int *c, int *r)
+{
+	*c = (720 - (bord ? 34 : 0)) / CW;
+	*r = (288 - (bord ? 40 : 0)) / CH;
+	if (*c > MAXCOLS)
+		*c = MAXCOLS;
+	if (*r > MAXROWS)
+		*r = MAXROWS;
+}
+
+int d_setup(int bord, int c, int r)
+{
+	if (logf)
+		fprintf(logf, "setup: %s %d x %d, cell %d x %d\n",
+			bord ? "border" : "no border", c, r, CW, CH);
+	d_cols = c;
+	d_rows = r;
 	return 0;
 }
 
@@ -88,7 +116,7 @@ static void chunk(FILE *f, char *type, unsigned char *d, unsigned long n)
 
 static void png(char *name, int scale)
 {
-	int w = COLS * CW * scale, h = PXH * scale, x, y;
+	int w = COLS * CW * scale, h = ROWS * CH * scale, x, y;
 	unsigned long rl = w * 3 + 1, n = rl * h, zn;
 	unsigned char *raw = malloc(n), *z, hd[13];
 	FILE *f;
@@ -269,6 +297,11 @@ int d_key(int wait)
 			continue;
 		case 'q':
 			return K_EXIT;
+		case 'g':
+			inword = 0;
+			if (sscanf(word + 1, "%dx%d", &d_cols, &d_rows) == 2)
+				return K_RESIZE;
+			continue;
 		}
 		inword = 0;
 	}

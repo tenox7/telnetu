@@ -2,7 +2,9 @@
 # On the 3B1 itself: sh mk3b1
 
 CC = cc
-CFLAGS = -O -g -Wall -Wno-unused-parameter -Wno-pointer-sign
+FONTDIR = /usr/lib/wfont/
+CFLAGS = -O -g -Wall -Wno-unused-parameter -Wno-pointer-sign \
+	-DFONTDIR=\"$(FONTDIR)\"
 SRC = telnet.c vt.c glyph.c ttyb.c net.c
 
 tnsim: $(SRC) wsim.c tn.h syms.h

@@ -7,14 +7,24 @@
  * ttyb.c    a plain terminal (serial port, rlogin, telnet): no emulation
  * net.c     TCP and DNS
  */
-#define VERSION "1.0"
+#define VERSION "1.1"
 
-#define COLS 80
-#define ROWS 24
-#define CW 9			/* a cell is 9 x 12 pixels, as the system font */
-#define CH 12
+/* the terminal's size is set at run time: vt_resize() */
+#define MAXCOLS 144		/* 720 pixels of a font 5 pixels wide */
+#define MAXROWS 36		/* 300 pixels of a font 8 pixels high */
+#define MINCOLS 20
+#define MINROWS 4
+#define COLS vt.cols
+#define ROWS vt.rows
+
+/* the cell is the font's size, set by r_init(): 9 x 12 for the system
+ * font, 6 x 10 for small, 5 x 10 for narrow */
+#define MAXCH 16
+extern int fcw, fch, fbase;	/* width, height, baseline row */
+#define CW fcw
+#define CH fch
 #define WPR 45			/* 16-bit words in a row of 720 pixels */
-#define PXH (ROWS * CH)		/* 288 */
+#define PXMAX 300		/* the bitmap's rows: no window is higher */
 
 /* cell attributes */
 #define AT_BOLD		0x01
@@ -45,7 +55,8 @@ typedef struct {
 #define CS_ASCII  4		/* tty mode only: UTF-8 shown as ASCII */
 
 typedef struct {
-	Cell buf[2][ROWS][COLS];	/* the main and the alternate screen */
+	Cell buf[2][MAXROWS][MAXCOLS];	/* the main and the alternate screen */
+	int cols, rows;			/* the size: vt_resize() */
 	int alt;
 	int x, y;			/* the cursor */
 	int wrap;			/* the last column is written: wrap first */
@@ -55,11 +66,11 @@ typedef struct {
 	int curshape;			/* 0 block, 1 underline */
 	int g[4], gl, ss;		/* G0-G3; GL is G0 or G1; single shift */
 	Saved save[2];			/* DECSC, one for each screen */
-	char tabs[COLS];
+	char tabs[MAXCOLS];
 	int charset;
 	int mouse, msgr;		/* mouse reports the host asked for */
 	unsigned long last;		/* the last letter (REP) */
-	char dirty[ROWS];
+	char dirty[MAXROWS];
 	/* the parser */
 	int st, par[16], np, sub, priv, inter, strk, ns;
 	char str[160];
@@ -89,6 +100,8 @@ extern Vt vt;
 #define K_HELP	0x10d
 #define K_MOUSE	0x10e		/* a click: mx, my, mb */
 #define K_BRK	0x10f		/* Break: a telnet BRK */
+#define K_RESIZE 0x110		/* the window has a new size: d_cols, d_rows */
+#define K_CLOSE	0x111		/* Cancl, or the X box on the border: quit */
 #define K_F1	0x120		/* to K_F1 + 15 */
 
 /* vt.c */
@@ -97,20 +110,24 @@ void vt_reset(void);
 void vt_write(unsigned char *s, int n);
 void vt_puts(char *s);
 void vt_dirtyall(void);
+void vt_resize(Vt *v, int cols, int rows);
 int vt_wide(unsigned long c);	/* a letter two cells wide */
 unsigned vt_cp437(int b);	/* a CP437 byte as Unicode */
 unsigned vt_c0(int b);		/* CP437's picture for a control code, or 0 */
 
 /* glyph.c */
-extern unsigned short bm[PXH][WPR];
-int r_init(char *fontfile);
+extern unsigned short bm[PXMAX][WPR];
+int r_init(char *fontfile, int trim);	/* trim: rows few letters use go */
 void r_draw(int all);
 void r_glyph(unsigned cp, unsigned short *rows);
 int r_ascii(unsigned cp);	/* an ASCII letter like it, or 0 */
 unsigned r_compose(unsigned base, unsigned mark);
 
 /* the display: w3b1.c or wsim.c */
-int d_open(void);
+int d_open(char *ask, int len);	/* ask: no host yet, ask for one in a box */
+void d_fit(int bord, int *cols, int *rows);	/* the most cells that fit */
+int d_setup(int bord, int cols, int rows);	/* the window's size, border */
+extern int d_cols, d_rows;	/* the size after the user resized it */
 void d_close(void);
 void d_blit(int y, int h);	/* bitmap rows to the screen */
 int d_key(int wait);		/* a key, or -1; wait: at most 0.1 s */

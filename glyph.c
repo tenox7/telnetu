@@ -1,9 +1,13 @@
-/* glyph.c - draws the terminal's cells into a bitmap of the window: 80 x 24
- * cells of 9 x 12 pixels. In the bitmap 1 is a lit pixel and the low bit
- * of each 16-bit word is the leftmost one, as the 3B1's wrastop() takes it.
+/* glyph.c - draws the terminal's cells into a bitmap of the window. A cell
+ * is as big as a letter of the font: 9 x 12 pixels in the system font. In
+ * the bitmap 1 is a lit pixel and the low bit of each 16-bit word is the
+ * leftmost one, as the 3B1's wrastop() takes it.
  *
- * Letters 0x20-0x7e come from the system font, /usr/lib/wfont/system.8.ft,
- * so the text looks as in any other window. The rest is drawn here: box
+ * Letters 0x20-0x7e come from a 3B1 font, the system font if not told
+ * otherwise (/usr/lib/wfont/system.8.ft), so the text looks as in any
+ * other window. Rows at the top or the bottom that hardly any letter uses
+ * can go (trim): then 80 x 24 cells of a small font fit in a window with
+ * a border. The rest is drawn here, for any size of cell: box
  * lines (single, heavy, double), blocks and shades, braille dots (MapSCII
  * draws maps with them), accented letters (the font's letter and an accent)
  * and a set of symbols. A letter it has no picture for is shown as
@@ -19,11 +23,15 @@
 #include "tn.h"
 #include "syms.h"
 
-unsigned short bm[PXH][WPR];
+unsigned short bm[PXMAX][WPR];
+int fcw = 9, fch = 12, fbase = 10;	/* the cell: as the system font */
 
-static unsigned short font[96][CH];	/* the system font: 9-bit rows */
-static Cell shadow[ROWS][COLS];		/* what the bitmap shows */
+static unsigned short font[96][MAXCH];	/* the font: a cell's rows */
+static unsigned short cmask = 0x1ff;	/* the bits of a cell's row */
+static int xtop = 4;			/* the top row of x */
+static Cell shadow[MAXROWS][MAXCOLS];	/* what the bitmap shows */
 static int curx = -1, cury = -1;	/* the cursor as drawn */
+static void boxsizes(void);
 
 /* brightness of the 16 colours, 0-15; at 8 and above a background is lit */
 static unsigned char lum[16] = {
@@ -37,11 +45,24 @@ static int rd16(unsigned char *p)
 	return p[0] << 8 | p[1];
 }
 
-int r_init(char *path)
+static int toprow(unsigned short *g)
 {
-	static unsigned char f[4096];
+	int y;
+
+	for (y = 0; y < fch; y++)
+		if (g[y])
+			return y;
+	return fch;
+}
+
+/* the font: 0, or -1 if it is no 3B1 font or no cell size it can take */
+int r_init(char *path, int trim)
+{
+	static unsigned char f[8192];
+	static unsigned short nf[96][32];
 	unsigned char *c;
-	int fd, n, i, r, w, hs, vs, ha, va, mr, x, y, base, rows;
+	int fd, n, i, r, w, hs, vs, ha, va, mr, x, y, base, rows, cw, chh;
+	int use[32], top, bot;
 	unsigned long bits;
 
 	fd = open(path, 0);
@@ -51,10 +72,16 @@ int r_init(char *path)
 	close(fd);
 	if (n < 32 + 96 * 8 || rd16(f + 2) != 0616)
 		return -1;
+	cw = f[5];
+	chh = f[6];
 	base = (signed char)f[7];
+	if (cw < 4 || cw > 16 || chh < 6 || chh > 32)
+		return -1;
+	for (y = 0; y < chh; y++)
+		use[y] = 0;
 	for (i = 0; i < 96; i++) {
-		for (y = 0; y < CH; y++)
-			font[i][y] = 0;
+		for (y = 0; y < chh; y++)
+			nf[i][y] = 0;
 		c = f + 32 + i * 8;
 		hs = (signed char)c[0];
 		vs = (signed char)c[1];
@@ -72,12 +99,36 @@ int r_init(char *path)
 					bits |= (unsigned long)rd16(f + n) << (16 * x);
 			}
 			y = base + va + r;
-			if (y < 0 || y >= CH)
+			if (y < 0 || y >= chh)
 				continue;
 			rows = ha >= 0 ? (int)(bits << ha) : (int)(bits >> -ha);
-			font[i][y] = rows & 0x1ff;
+			nf[i][y] = rows & ((1 << cw) - 1);
+			if (nf[i][y] && i > 0 && i < 95)
+				use[y]++;
 		}
 	}
+	top = 0;
+	bot = chh - 1;
+	if (trim) {
+		/* rows of 2 letters or less at the top (| reaches up there)
+		 * and empty ones at the bottom */
+		while (top < 2 && use[top] <= 2)
+			top++;
+		while (bot > base && use[bot] == 0)
+			bot--;
+	}
+	if (bot - top + 1 > MAXCH)
+		return -1;
+	fcw = cw;
+	fch = bot - top + 1;
+	fbase = base - top;
+	cmask = (1 << fcw) - 1;
+	for (i = 0; i < 96; i++)
+		for (y = 0; y < fch; y++)
+			font[i][y] = nf[i][y + top];
+	xtop = toprow(font['x' - 32]);
+	boxsizes();
+	curx = cury = -1;
 	return 0;
 }
 
@@ -102,11 +153,29 @@ static char *boxes =
 	"0110" "x1.." "x2.." "x3.." "1000" "0010" "0100" "0001"
 	"2000" "0020" "0200" "0002" "1200" "0012" "2100" "0021";
 
-#define X1 2		/* double lines: columns 2-3 and 6-7 */
-#define X2 6
-#define Y1 4		/* rows 4 and 7 */
-#define Y2 7
-#define YC 5		/* a single horizontal line: row 5 (6 too if heavy) */
+/* where the lines go in a cell; for 9 x 12: a light | is columns 4-5, a
+ * heavy one 3-6; a light - is row 5, a heavy one 5-6; a double | is
+ * columns 2-3 and 6-7, a double - rows 4 and 7 */
+static int lv0, lv1, hv0, hv1;		/* light and heavy | columns */
+static int YC;				/* the row of a - */
+static int X1, X2, XW;			/* double |: 2 lines XW wide */
+static int Y1, Y2;			/* double -: rows */
+
+static void boxsizes(void)
+{
+	int lw = fcw >= 6 ? 2 : 1, gap = fcw >= 6 ? 2 : 1;
+
+	lv0 = (fcw - lw + 1) / 2;
+	lv1 = lv0 + lw - 1;
+	hv0 = lv0 - 1;
+	hv1 = lv1 + 1;
+	YC = (fch - 1) / 2;
+	XW = fcw >= 8 ? 2 : 1;
+	X1 = (fcw - (2 * XW + gap) + 1) / 2;
+	X2 = X1 + XW + gap;
+	Y1 = YC - 1;
+	Y2 = YC + 2;
+}
 
 static void hline(unsigned short *g, int y, int x0, int x1)
 {
@@ -130,19 +199,20 @@ static void box(unsigned short *g, char *d)
 {
 	int L = d[0] - '0', R = d[1] - '0', U = d[2] - '0', D = d[3] - '0';
 	int vh = U == 2 || D == 2, hh = L == 2 || R == 2;
-	int vlo = vh ? 3 : 4, vhi = vh ? 6 : 5;	/* columns of a single | */
+	int vlo = vh ? hv0 : lv0, vhi = vh ? hv1 : lv1;	/* columns of a | */
 	int hlo = YC, hhi = hh ? YC + 1 : YC;	/* rows of a single - */
+	int XR1 = X1 + XW - 1, XR2 = X2 + XW - 1;	/* right columns of = */
 	int e, e2, t;
 
 	/* horizontal arms */
 	if (L == 3) {
-		e = U == 3 ? X1 + 1 : D == 3 ? X2 + 1 : vhi;
-		e2 = D == 3 ? X1 + 1 : U == 3 ? X2 + 1 : vhi;
+		e = U == 3 ? XR1 : D == 3 ? XR2 : vhi;
+		e2 = D == 3 ? XR1 : U == 3 ? XR2 : vhi;
 		hline(g, Y1, 0, e);
 		hline(g, Y2, 0, e2);
 	} else if (L) {
-		e = U == 3 && D == 3 && !R ? X1 + 1 : U == 3 || D == 3 ?
-			X2 + 1 : vhi;
+		e = U == 3 && D == 3 && !R ? XR1 : U == 3 || D == 3 ?
+			XR2 : vhi;
 		for (t = YC; t <= (L == 2 ? YC + 1 : YC); t++)
 			hline(g, t, 0, e);
 	}
@@ -160,25 +230,25 @@ static void box(unsigned short *g, char *d)
 	if (U == 3) {
 		e = L == 3 ? Y1 : R == 3 ? Y2 : hhi;
 		e2 = R == 3 ? Y1 : L == 3 ? Y2 : hhi;
-		vline(g, X1, 0, e);
-		vline(g, X1 + 1, 0, e);
-		vline(g, X2, 0, e2);
-		vline(g, X2 + 1, 0, e2);
+		for (t = 0; t < XW; t++) {
+			vline(g, X1 + t, 0, e);
+			vline(g, X2 + t, 0, e2);
+		}
 	} else if (U) {
 		e = L == 3 && R == 3 && !D ? Y1 : L == 3 || R == 3 ? Y2 : hhi;
-		for (t = U == 2 ? 3 : 4; t <= (U == 2 ? 6 : 5); t++)
+		for (t = U == 2 ? hv0 : lv0; t <= (U == 2 ? hv1 : lv1); t++)
 			vline(g, t, 0, e);
 	}
 	if (D == 3) {
 		e = L == 3 ? Y2 : R == 3 ? Y1 : hlo;
 		e2 = R == 3 ? Y2 : L == 3 ? Y1 : hlo;
-		vline(g, X1, e, CH - 1);
-		vline(g, X1 + 1, e, CH - 1);
-		vline(g, X2, e2, CH - 1);
-		vline(g, X2 + 1, e2, CH - 1);
+		for (t = 0; t < XW; t++) {
+			vline(g, X1 + t, e, CH - 1);
+			vline(g, X2 + t, e2, CH - 1);
+		}
 	} else if (D) {
 		e = L == 3 && R == 3 && !U ? Y2 : L == 3 || R == 3 ? Y1 : hlo;
-		for (t = D == 2 ? 3 : 4; t <= (D == 2 ? 6 : 5); t++)
+		for (t = D == 2 ? hv0 : lv0; t <= (D == 2 ? hv1 : lv1); t++)
 			vline(g, t, e, CH - 1);
 	}
 }
@@ -188,16 +258,23 @@ static void dash(unsigned short *g, char *d)
 {
 	int heavy = d[1] == '2', n = d[3] - '0', i, t;
 
+	int p;
+
 	if (d[2] == 'h') {
+		p = CW == 9 ? (n == 2 ? 5 : n == 3 ? 3 : 2) : (CW + n - 1) / n;
+		if (p < 2)
+			p = 2;
 		for (i = 0; i < CW; i++)
-			if (i % (n == 2 ? 5 : n == 3 ? 3 : 2) !=
-				(n == 2 ? 4 : n == 3 ? 2 : 1))
+			if (i % p != p - 1)
 				for (t = YC; t <= YC + heavy; t++)
 					g[t] |= 1 << i;
 	} else {
+		p = CH / n;
+		if (p < 2)
+			p = 2;
 		for (i = 0; i < CH; i++)
-			if (i % (12 / n) != 12 / n - 1)
-				for (t = heavy ? 3 : 4; t <= (heavy ? 6 : 5); t++)
+			if (i % p != p - 1)
+				for (t = heavy ? hv0 : lv0; t <= (heavy ? hv1 : lv1); t++)
 					g[i] |= 1 << t;
 	}
 }
@@ -215,7 +292,7 @@ static void diag(unsigned short *g, int which)
 			g[y] |= 3 << x >> 1 | 1 << x;
 	}
 	for (y = 0; y < CH; y++)
-		g[y] &= 0x1ff;
+		g[y] &= cmask;
 }
 
 /* ---- blocks: U+2580-259F ---- */
@@ -250,22 +327,24 @@ static void block(unsigned short *g, int c, int odd)
 {
 	int n;
 
+	int r = CW - 1, b = CH - 1, qx = (CW + 1) / 2, qy = CH / 2;
+
 	if (c == 0x80) {
-		rect(g, 0, 0, 8, 5);
+		rect(g, 0, 0, r, CH / 2 - 1);
 	} else if (c >= 0x81 && c <= 0x88) {
 		n = (c - 0x80) * CH / 8;
-		rect(g, 0, CH - n, 8, 11);
+		rect(g, 0, CH - n, r, b);
 	} else if (c >= 0x89 && c <= 0x8f) {
 		n = (0x90 - c) * CW / 8;
-		rect(g, 0, 0, n - 1, 11);
+		rect(g, 0, 0, n - 1, b);
 	} else if (c == 0x90) {
-		rect(g, 4, 0, 8, 11);
+		rect(g, CW / 2, 0, r, b);
 	} else if (c >= 0x91 && c <= 0x93) {
 		shade(g, c - 0x90, odd);
 	} else if (c == 0x94) {
-		rect(g, 0, 0, 8, 1);
+		rect(g, 0, 0, r, (CH + 4) / 8 - 1);
 	} else if (c == 0x95) {
-		rect(g, 8, 0, 8, 11);
+		rect(g, r, 0, r, b);
 	} else {
 		/* quadrants: bits upper left 1, upper right 2, lower left 4,
 		 * lower right 8 */
@@ -273,30 +352,34 @@ static void block(unsigned short *g, int c, int odd)
 
 		n = q[c - 0x96];
 		if (n & 1)
-			rect(g, 0, 0, 4, 5);
+			rect(g, 0, 0, qx - 1, qy - 1);
 		if (n & 2)
-			rect(g, 5, 0, 8, 5);
+			rect(g, qx, 0, r, qy - 1);
 		if (n & 4)
-			rect(g, 0, 6, 4, 11);
+			rect(g, 0, qy, qx - 1, b);
 		if (n & 8)
-			rect(g, 5, 6, 8, 11);
+			rect(g, qx, qy, r, b);
 	}
 }
 
-/* braille: 2 x 4 dots of 2 x 2 pixels */
+/* braille: 2 x 4 dots, of 2 x 2 pixels in cells of 9 x 12 */
 static void braille(unsigned short *g, int b)
 {
 	static unsigned char bit[8][2] = {
 		{0, 0}, {0, 1}, {0, 2}, {1, 0}, {1, 1}, {1, 2}, {0, 3}, {1, 3}
 	};
-	int i, x, y;
+	int i, x, y, dw = CW >= 6 ? 2 : 1, dh = CH >= 11 ? 2 : 1;
+	int half = CW / 2, dot = dw == 2 ? 3 : 1;
 
 	for (i = 0; i < 8; i++)
 		if (b & 1 << i) {
-			x = bit[i][0] ? 5 : 1;
-			y = bit[i][1] * 3;
-			g[y] |= 3 << x;
-			g[y + 1] |= 3 << x;
+			x = bit[i][0] ? half + (CW - half - dw) / 2 :
+				(half - dw) / 2;
+			y = CH >= 11 ? bit[i][1] * 3 + (CH - 11) / 2 :
+				(bit[i][1] * CH + CH / 4) / 4;
+			g[y] |= dot << x;
+			if (dh == 2)
+				g[y + 1] |= dot << x;
 		}
 }
 
@@ -370,10 +453,141 @@ static void squeeze(unsigned short *g)
 	g[0] = g[1] = 0;
 }
 
+/* ---- accents for fonts of other sizes ----
+ * Marks of 1 or 2 rows (X: a lit pixel), centred on the letter; over it,
+ * or under it for , and ; */
+static struct { char m; char *r0, *r1; } smarks[] = {
+	{'`', "X.", ".X"}, {'\'', ".X", "X."}, {'^', ".X.", "X.X"},
+	{'~', ".X.X", "X.X."}, {':', "", "X.X"}, {'o', "XX", "XX"},
+	{'=', "", "XXX"}, {'u', "X..X", ".XX."}, {'v', "X.X", ".X."},
+	{'.', "", "X"}, {'"', ".X.X", "X.X."}, {',', ".X", "X."},
+	{';', "X.", ".X"}, {0, 0, 0}
+};
+
+static int slen(char *s)
+{
+	int n = 0;
+
+	while (s[n])
+		n++;
+	return n;
+}
+
+static void putrow(unsigned short *g, int y, char *r, int x)
+{
+	for (; *r; r++, x++)
+		if (*r == 'X' && y >= 0 && y < CH && x >= 0 && x < CW)
+			g[y] |= 1 << x;
+}
+
+/* a row of the letter goes, one like the next (else the middle one), and
+ * the rows over it come down: a free row at the top */
+static void squeeze2(unsigned short *g, int top)
+{
+	int r, y, bot = fbase - 1;
+
+	for (r = top + 1; r < bot && g[r] != g[r + 1]; r++)
+		;
+	if (r >= bot)
+		r = (top + bot) / 2;
+	for (y = r; y > 0; y--)
+		g[y] = g[y - 1];
+	g[0] = 0;
+}
+
+static void letter2(unsigned short *g, int base, int m)
+{
+	int y, y0, y1, i, top, lo, hi, all, mw, mh, x0, stem, n, best;
+	unsigned short half = (1 << (CW + 1) / 2) - 1;
+
+	for (y = 0; y < CH; y++)
+		g[y] = font[base - 32][y];
+	if (base == 'i' && m != '.' && m != ' ')	/* the dot goes */
+		for (y = 0; y < xtop; y++)
+			g[y] = 0;
+	for (all = 0, y = 0; y < CH; y++)
+		all |= g[y];
+	for (lo = 0; lo < CW - 1 && !(all >> lo & 1); lo++)
+		;
+	for (hi = CW - 1; hi > 0 && !(all >> hi & 1); hi--)
+		;
+	top = toprow(g);
+	switch (m) {
+	case ' ':
+		break;
+	case '/':
+		if (base == 'o' || base == 'O') {
+			y0 = top > 0 ? top - 1 : 0;
+			y1 = fbase < CH ? fbase : CH - 1;
+			for (y = y0; y <= y1; y++) {
+				x0 = hi + 1 - (y - y0) * (hi - lo + 2) /
+					(y1 > y0 ? y1 - y0 : 1);
+				if (x0 >= 0 && x0 < CW)
+					g[y] |= 1 << x0;
+			}
+		} else {		/* l L: across the stem */
+			stem = lo;
+			for (best = -1, i = lo; i <= hi; i++) {
+				for (n = 0, y = 0; y < CH; y++)
+					n += g[y] >> i & 1;
+				if (n > best) {
+					best = n;
+					stem = i;
+				}
+			}
+			y = (top + fbase - 1) / 2;
+			putrow(g, y - 1, "XX", stem + 1);
+			putrow(g, y + 1, "XX", stem - 2);
+		}
+		break;
+	case '-':
+		if (base == 'D')
+			putrow(g, (top + fbase - 1) / 2, "XXXX", lo - 1);
+		else			/* d: over the bowl */
+			putrow(g, (top + xtop) / 2, "XXXX", hi - 2);
+		break;
+	case 'E':
+	case 'e':				/* ae oe: half and half */
+		for (y = 0; y < CH; y++)
+			g[y] = (g[y] & half) | (font[m - 32][y] & ~half & cmask);
+		break;
+	default:
+		for (i = 0; smarks[i].m && smarks[i].m != m; i++)
+			;
+		if (!smarks[i].m)
+			break;
+		mw = slen(smarks[i].r0) > slen(smarks[i].r1) ?
+			slen(smarks[i].r0) : slen(smarks[i].r1);
+		mh = smarks[i].r0[0] ? 2 : 1;
+		if (m == ',' || m == ';') {	/* under the letter */
+			x0 = m == ';' ? hi - mw + 1 : (lo + hi + 1) / 2 - mw / 2;
+			putrow(g, fbase, smarks[i].r0, x0);
+			putrow(g, fbase + 1, smarks[i].r1, x0);
+			break;
+		}
+		while (top < mh && top < fbase - 3) {	/* make room */
+			squeeze2(g, top);
+			top++;
+		}
+		x0 = (lo + hi + 1) / 2 - mw / 2;
+		y = top - (top > mh ? 1 : 0) - mh;	/* a free row if room */
+		if (mh == 2)
+			putrow(g, y, smarks[i].r0, x0);
+		putrow(g, y + mh - 1, smarks[i].r1, x0);
+		break;
+	}
+	for (y = 0; y < CH; y++)
+		g[y] &= cmask;
+}
+
 static void letter(unsigned short *g, int base, int m)
 {
 	int y, i, cap = base >= 'A' && base <= 'Z';
 
+	if (CW != 9 || CH != 12) {
+		letter2(g, base, m);
+		return;
+	}
 	for (y = 0; y < CH; y++)
 		g[y] = font[base - 32][y];
 	if (base == 'i' && m != '.' && m != ' ')	/* the dot goes */
@@ -460,15 +674,37 @@ unsigned r_compose(unsigned base, unsigned mark)
 /* ---- symbols: syms.txt ---- */
 static int sym(unsigned short *g, unsigned cp)
 {
-	int i, y;
+	int i, x, y, sx, sy, x0, x1, y0, y1;
 
 	for (i = 0; syms[i].cp; i++)
-		if (syms[i].cp == cp) {
-			for (y = 0; y < CH; y++)
-				g[y] = syms[i].rows[y];
-			return 1;
+		if (syms[i].cp == cp)
+			break;
+	if (!syms[i].cp)
+		return 0;
+	if (CW == 9 && CH == 12) {
+		for (y = 0; y < CH; y++)
+			g[y] = syms[i].rows[y];
+		return 1;
+	}
+	/* another size: a pixel is lit if one of the 9 x 12 under it is */
+	for (y = 0; y < CH; y++) {
+		g[y] = 0;
+		y0 = y * 12 / CH;
+		y1 = (y + 1) * 12 / CH;
+		if (y1 <= y0)
+			y1 = y0 + 1;
+		for (x = 0; x < CW; x++) {
+			x0 = x * 9 / CW;
+			x1 = (x + 1) * 9 / CW;
+			if (x1 <= x0)
+				x1 = x0 + 1;
+			for (sy = y0; sy < y1; sy++)
+				for (sx = x0; sx < x1; sx++)
+					if (syms[i].rows[sy] >> sx & 1)
+						g[y] |= 1 << x;
 		}
-	return 0;
+	}
+	return 1;
 }
 
 /* letters that look like an ASCII one */
@@ -554,9 +790,9 @@ static void glyph(unsigned cp, unsigned short *g, int odd)
 		return;
 	}
 	if (cp >= 0x23ba && cp <= 0x23bd) {	/* DEC scan lines 1 3 7 9 */
-		static char row[4] = {0, 3, 8, 11};
-
-		g[(int)row[cp - 0x23ba]] = 0x1ff;
+		i = cp - 0x23ba;
+		g[i == 0 ? 0 : i == 1 ? CH / 4 : i == 2 ? CH - 1 - CH / 4 :
+			CH - 1] = cmask;
 		return;
 	}
 	if (cp >= 0xc0 && cp <= 0xff) {
@@ -569,7 +805,7 @@ static void glyph(unsigned cp, unsigned short *g, int odd)
 	}
 	if (cp == 0xfffd) {		/* a bad byte: an inverse ? */
 		for (i = 0; i < CH; i++)
-			g[i] = font['?' - 32][i] ^ (i < 11 ? 0x1ff : 0);
+			g[i] = font['?' - 32][i] ^ (i < CH - 1 ? cmask : 0);
 		return;
 	}
 	if (cp >= 0x100 && cp <= 0x451) {
@@ -605,7 +841,7 @@ static int thick(unsigned cp)
 /* one cell into the bitmap; cur: the cursor is on it */
 static void drawcell(int cx, int cy, Cell *c, int cur)
 {
-	unsigned short g[CH];
+	unsigned short g[MAXCH];
 	unsigned long v, m;
 	int y, x0, w, s, inv;
 
@@ -620,35 +856,35 @@ static void drawcell(int cx, int cy, Cell *c, int cur)
 			g[y] = 0;
 	if ((c->at & AT_BOLD) && thick(c->ch))
 		for (y = 0; y < CH; y++)
-			g[y] |= (g[y] << 1) & 0x1ff;
+			g[y] |= (g[y] << 1) & cmask;
 	if ((c->at & AT_ITAL) && thick(c->ch))	/* a slant */
 		for (y = 0; y < CH; y++)
-			g[y] = y < 4 ? (g[y] << 1) & 0x1ff : y > 7 ? g[y] >> 1 :
-				g[y];
+			g[y] = y < CH / 3 ? (g[y] << 1) & cmask :
+				y >= CH * 2 / 3 ? g[y] >> 1 : g[y];
 	if (c->at & AT_UNDER)
-		g[10] = 0x1ff;
+		g[fbase < CH ? fbase : CH - 1] = cmask;
 	if (c->at & AT_STRIKE)
-		g[5] = 0x1ff;
+		g[fbase / 2] = cmask;
 	if (vt.rvscreen)
 		inv = !inv;
 	if (inv)
 		for (y = 0; y < CH; y++)
-			g[y] ^= 0x1ff;
+			g[y] ^= cmask;
 	if (cur) {
 		for (y = vt.curshape ? CH - 2 : 0; y < CH; y++)
-			g[y] ^= 0x1ff;
+			g[y] ^= cmask;
 	}
 	x0 = cx * CW;
 	w = x0 >> 4;
 	s = x0 & 15;
-	m = (unsigned long)0x1ff << s;
+	m = (unsigned long)cmask << s;
 	for (y = 0; y < CH; y++) {
 		unsigned short *p = &bm[cy * CH + y][w];
 
 		v = (unsigned long)g[y] << s;
 		p[0] = (p[0] & ~(unsigned short)(m & 0xffff)) |
 			(unsigned short)(v & 0xffff);
-		if (s > 7)
+		if (s + CW > 16)
 			p[1] = (p[1] & ~(unsigned short)(m >> 16)) |
 				(unsigned short)(v >> 16);
 	}

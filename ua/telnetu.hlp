@@ -1,9 +1,9 @@
 Wlabel = "TelnetU Help"
-Contents = TelnetU,TelnetU Keys,TelnetU Commands
+Contents = TelnetU,TelnetU Keys,TelnetU Commands,TelnetU Window
 Name = TelnetU
 Llabel = " TELNETU"
 Slabel = "TELNETU"
-Branch = TelnetU Keys,TelnetU Commands
+Branch = TelnetU Keys,TelnetU Commands,TelnetU Window
 Title = "TelnetU - VT100/UTF-8 Terminal"
 Text =
 TelnetU logs you in to another computer on the network, as \
@@ -13,13 +13,18 @@ Cyrillic letters, and the art of BBSes (CP437) come out right. \
 So today's telnet hosts look as they should: BBSes, MUDs, \
 nethack.alt.org, telehack.com, mapscii.me.
 
-Type the name or the address of the host, then press Enter. \
-Press Cmd for the list of known hosts. Names that are not in \
+A box asks for the host. Type its name or its address, then \
+press Return or Enter. A port may follow: 10.0.2.2 2323. \
+Press Cmd for the list of known hosts: choose one with the \
+arrows and Return, or click it. Names that are not in \
 /etc/hosts are looked up with DNS. With no name, you get the \
-telnet> prompt.
+telnet> prompt. Exit closes the box.
 
-TelnetU opens a window of its own: 80 columns by 24 lines. \
-When you leave it, you come back here.
+The TelnetU menu has 6 ways to run it. Full Screen fills the \
+screen. Window is a window with a border, which you can move \
+and resize. Each comes with the system font, the small font \
+or the narrow font (more columns). When you leave TelnetU, \
+you come back here.
 
 In a UNIX System window, type: telnetu host [port]. \
 The old telnet is still there: telnet host. \EOT\
@@ -27,12 +32,15 @@ The old telnet is still there: telnet host. \EOT\
 Name = TelnetU Keys
 Llabel = " TELNETU  KEYS"
 Slabel = "  KEYS"
-Branch = TelnetU,TelnetU Commands
+Branch = TelnetU,TelnetU Commands,TelnetU Window
 Title = "TelnetU Keys"
 Text =
 Exit gives the telnet> prompt at the bottom of the window. \
 There, Return takes you back to the host, and Exit again \
 closes the connection and the window.
+
+Cancl, or the X box at the bottom left of the window, closes \
+the connection and the window at once.
 
 ^] does the same as Exit. So does ~ at the start of a line: \
 ~quit closes the connection, and ~~ sends one ~.
@@ -47,7 +55,7 @@ A mouse click goes to hosts that ask for the mouse. \EOT\
 Name = TelnetU Commands
 Llabel = " TELNETUCOMMANDS"
 Slabel = "COMMANDS"
-Branch = TelnetU,TelnetU Keys
+Branch = TelnetU,TelnetU Keys,TelnetU Window
 Title = "TelnetU Commands"
 Text =
 At the telnet> prompt, type a command and press Return:
@@ -61,3 +69,26 @@ charset c          auto utf8 latin1 cp437
 term types         the terminal types to give the host
 status             what is going on
 ?                  all the commands \EOT\
+
+Name = TelnetU Window
+Llabel = " TELNETU WINDOW"
+Slabel = " WINDOW"
+Branch = TelnetU,TelnetU Keys,TelnetU Commands
+Title = "TelnetU Window, Fonts and Sizes"
+Text =
+A Window has a border. To move it, use the box at its top \
+left; to resize it, the box at its bottom right. The host \
+gets the new size. The ? box is the Help key, and the X box \
+closes TelnetU.
+
+In a UNIX System window:
+telnetu [-w] [-f font] [-g CxL] host [port]
+-w        a window with a border
+-f font   system 9x12, small 6x10, narrow 5x10
+-g CxL    columns x lines, such as -g 100x30
+
+At the telnet> prompt, these change it at once:
+window, full (no border), font name, size CxL.
+
+Without a border, at most: system 80x24, small 120x28, \
+narrow 144x28. With one: 76x20, 114x24, 137x24. \EOT\

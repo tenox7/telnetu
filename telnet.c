@@ -24,6 +24,7 @@
 extern char *getenv();
 extern void exit();
 extern int system();
+extern int atoi();
 #endif
 #include "tn.h"
 
@@ -66,6 +67,10 @@ static int net = -1;		/* the connection */
 static char host[80], addr[40];
 static int port = 23;
 static int win;			/* the window and its terminal; else tty */
+static int bord;		/* the window has a border (-w) */
+static char *fontname = "system";
+static Vt saved;		/* the host's screen, under the telnet> prompt */
+static int insaved;		/* saved has it now */
 static int escc = 035;		/* ^] */
 static int tildes = 1;		/* ~ at the start of a line escapes too */
 static int bol = 1;		/* at the start of a line */
@@ -90,6 +95,7 @@ static int on;
 static void out(unsigned char *s, int n);
 static void cmdmode(int fromkey);
 static void note(char *s);
+static void newsize(int c, int r);
 
 /* ---- sending ---- */
 
@@ -142,6 +148,21 @@ void tn_bell(void)
 		d_bell();
 }
 
+/* the window's title: "TelnetU : " and the host, or the title the
+ * host gave (xterm's OSC 0 or 2) */
+static void settitle(char *s)
+{
+	char buf[80];
+
+	if (!win)
+		return;
+	if (s && *s) {
+		sprintf(buf, "TelnetU : %.60s", s);
+		d_title(buf);
+	} else
+		d_title("TelnetU");
+}
+
 void tn_title(char *s)
 {
 	int i;
@@ -150,8 +171,7 @@ void tn_title(char *s)
 		title[i] = (s[i] & 0377) < ' ' || (s[i] & 0377) > '~' ? ' ' :
 			s[i];
 	title[i] = 0;
-	if (win)
-		d_title(title[0] ? title : host);
+	settitle(title[0] ? title : host);
 }
 
 static char *optname(int o)
@@ -488,7 +508,13 @@ static void note(char *s)
 /* a key, or -1; wait: wait for one at most 0.1 s */
 static int key(int wait)
 {
-	return win ? d_key(wait) : t_key(wait);
+	int k;
+
+	if (!win)
+		return t_key(wait);
+	while ((k = d_key(wait)) == K_RESIZE)	/* the user resized it */
+		newsize(d_cols, d_rows);
+	return k;
 }
 
 /* ---- keys to the host ---- */
@@ -627,9 +653,16 @@ static void linekey(int k)
 	}
 }
 
+static void tclose(void);
+
 /* a key from the user */
 static void dokey(int k)
 {
+	if (k == K_CLOSE) {		/* Cancl or the X box: close it all */
+		tclose();
+		quitting = 1;
+		return;
+	}
 	if (k == K_EXIT || k == escc) {
 		cmdmode(1);
 		return;
@@ -721,7 +754,7 @@ static int topen(char *h, char *p)
 		sprintf(buf, "%s  -  Exit or ^%c: telnet> prompt", host,
 			escc + '@');
 		d_prompt(buf);
-		d_title(host);
+		settitle(host);
 	}
 	/* a telnet server: say what we can do (BSD telnet does as much) */
 	if (tport) {
@@ -743,12 +776,102 @@ static void tclose(void)
 	}
 }
 
+/* ---- the window's size and font ---- */
+
+/* the fonts by name: the cell's size is in pixels. Another name is the
+ * path of a 3B1 font file. small and narrow lose their top row (and
+ * narrow its bottom one, which is empty), so that 24 lines fit in a
+ * window with a border. */
+#ifndef FONTDIR
+#define FONTDIR "/usr/lib/wfont/"
+#endif
+static struct { char *name, *file, *size; int trim; } fonts[] = {
+	{"system", "system.8.ft", "9x12", 0},
+	{"small", "PLAIN.R.E.11.A", "6x10", 1},
+	{"narrow", "system.144.ft", "5x10", 1},
+	{0, 0, 0, 0}
+};
+
+static int same(char *a, char *b)
+{
+	while (*a && *a == *b) {
+		a++;
+		b++;
+	}
+	return *a == *b;
+}
+
+static int loadfont(char *name)
+{
+	char path[160];
+	int i;
+
+	for (i = 0; fonts[i].name; i++)
+		if (same(name, fonts[i].name)) {
+			sprintf(path, "%s%s", FONTDIR, fonts[i].file);
+			return r_init(path, fonts[i].trim);
+		}
+	return r_init(name, 0);
+}
+
+/* COLSxLINES, such as 80x24: 1 if it is one */
+static int getsize(char *a, int *c, int *r)
+{
+	char *x = a;
+
+	while (*x >= '0' && *x <= '9')
+		x++;
+	if (x == a || (*x != 'x' && *x != 'X') || x[1] < '0' || x[1] > '9')
+		return 0;
+	*c = atoi(a);
+	*r = atoi(x + 1);
+	return 1;
+}
+
+/* the terminal takes a new size; the host gets it */
+static void newsize(int c, int r)
+{
+	int changed = c != COLS || r != ROWS;
+
+	if (changed) {
+		vt_resize(&vt, c, r);
+		if (insaved)
+			vt_resize(&saved, c, r);
+	}
+	vt_dirtyall();
+	r_draw(1);
+	if (changed && net >= 0 && us[O_NAWS] == YES) {
+		naws();
+		nflush();
+	}
+}
+
+/* the window's border (bord) and size. 0 is the default: with a border
+ * 80 x 24, or less if that does not fit; without, all of the screen. */
+static void shape(int c, int r)
+{
+	int mc, mr;
+
+	d_fit(bord, &mc, &mr);
+	if (c <= 0)
+		c = bord ? 80 : mc;
+	if (r <= 0)
+		r = bord ? 24 : mr;
+	c = c > mc ? mc : c < MINCOLS ? MINCOLS : c;
+	r = r > mr ? mr : r < MINROWS ? MINROWS : r;
+	if (d_setup(bord, c, r) == 0) {
+		c = d_cols;
+		r = d_rows;
+	}
+	newsize(c, r);
+}
+
 /* ---- the telnet> prompt ---- */
 
 static char *help[] = {
 	"open host [port]  connect (o)",
 	"close             close the connection (c)",
-	"quit              close and leave telnet (q, Exit twice)",
+	"quit              close and leave telnet (q, Exit twice, Cancl)",
 	"z                 a local shell (exit it to come back)",
 	"send x            ayt brk ip ao ec el eof nop escape",
 	"escape [c]        the escape character, as ^] or c",
@@ -758,6 +881,10 @@ static char *help[] = {
 	"bs                Backspace sends DEL or BS",
 	"mode line|char    local or remote echo",
 	"options           show option negotiation",
+	"window [CxL]      a window with a border: move or resize it",
+	"full [CxL]        no border: all of the screen, or C x L",
+	"font [name]       system 9x12, small 6x10, narrow 5x10",
+	"size CxL          columns x lines, such as 80x24",
 	"status            what is going on",
 	"Return            back to the host",
 	0
@@ -792,6 +919,12 @@ static void status(void)
 		win ? (bsdel ? "DEL" : "BS") : "", him[O_BINARY] == YES ? "on" :
 		"off", us[O_BINARY] == YES ? "on" : "off");
 	note(buf);
+	if (win) {
+		sprintf(buf, "Window: %s, %d x %d, font %s (%d x %d pixels).\r\n",
+			bord ? "with a border" : "no border", COLS, ROWS,
+			fontname, CW, CH);
+		note(buf);
+	}
 }
 
 static char *word(char **s)
@@ -854,6 +987,61 @@ static int command(char *s)
 	}
 	if (is(w, "status", 2)) {
 		status();
+		return 0;
+	}
+	if (is(w, "window", 1) || is(w, "full", 2) || is(w, "size", 2)) {
+		int c = 0, r = 0;
+
+		a = word(&s);
+		if (!win) {
+			note("Not in a window.\r\n");
+			return 0;
+		}
+		if (*a && !getsize(a, &c, &r)) {
+			note("The size is columns x lines, such as 80x24.\r\n");
+			return 0;
+		}
+		if (w[0] == 's') {
+			if (!*a) {
+				note("size what? Such as: size 80x24\r\n");
+				return 0;
+			}
+		} else
+			bord = w[0] == 'w';
+		shape(c, r);
+		return 0;
+	}
+	if (is(w, "font", 2)) {
+		static char fn[80];
+
+		a = word(&s);
+		if (!win) {
+			note("Not in a window.\r\n");
+			return 0;
+		}
+		if (!*a) {
+			char fb[300];
+
+			for (i = 0; fonts[i].name; i++) {
+				sprintf(fb, "%-8s %-5s %.200s%s%s\r\n", fonts[i].name,
+					fonts[i].size, FONTDIR, fonts[i].file,
+					same(fonts[i].name, fontname) ? " (now)" : "");
+				note(fb);
+			}
+			note("or the path of a 3B1 font file\r\n");
+			return 0;
+		}
+		if (loadfont(a) < 0) {
+			sprintf(buf, "No font %.60s.\r\n", a);
+			note(buf);
+			return 0;
+		}
+		for (i = 0; a[i] && i < (int)sizeof fn - 1; i++)
+			fn[i] = a[i];
+		fn[i] = 0;
+		fontname = fn;
+		/* with a border the same cells, without all of the screen */
+		shape(bord ? COLS : 0, bord ? ROWS : 0);
 		return 0;
 	}
 	if (is(w, "?", 1) || is(w, "help", 1)) {
@@ -987,8 +1175,6 @@ static int command(char *s)
 	return 0;
 }
 
-static Vt saved;
-
 /* back to the host's screen after the telnet> prompt */
 static void restore(void)
 {
@@ -999,6 +1185,7 @@ static void restore(void)
 		return;
 	}
 	vt = saved;
+	insaved = 0;
 	vt_dirtyall();
 	r_draw(1);
 	if (net >= 0) {
@@ -1016,6 +1203,7 @@ static void cmdmode(int fromkey)
 
 	if (win) {
 		saved = vt;
+		insaved = 1;
 		vt.wrap = 0;
 		vt.at = 0;
 		vt.fg = vt.bg = C_DEF;
@@ -1051,6 +1239,12 @@ static void cmdmode(int fromkey)
 				/* ~~ sends a ~ */
 				n = -2;
 				break;
+			}
+			if (k == K_CLOSE) {
+				note("quit\r\n");
+				tclose();
+				quitting = 1;
+				return;
 			}
 			if (k == K_EXIT) {
 				if (n == 0) {
@@ -1179,16 +1373,17 @@ static char *prog = "telnetu";	/* our name, from argv[0] */
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: %s [-t] [-a] [-e c] [-T type,...] "
-		"[-C charset] [host [port]]\n", prog);
+	fprintf(stderr, "usage: %s [-w] [-f font] [-g colsxlines] [-t] [-a] "
+		"[-e c] [-T type,...] [-C charset] [host [port]]\n", prog);
 	exit(2);
 }
 
 int main(int argc, char **argv)
 {
-	char *fontfile = "/usr/lib/wfont/system.8.ft", *t, *h = 0, *p = 0;
-	int tty = 0, i, n, cs = CS_AUTO;
+	char *t, *h = 0, *p = 0;
+	int tty = 0, i, n, cs = CS_AUTO, wc = 0, wr = 0;
 	static char types[80];
+	static char ask[80];		/* from the host box */
 
 	if (argc > 0 && argv[0] && argv[0][0]) {
 		prog = argv[0];
@@ -1226,8 +1421,13 @@ int main(int argc, char **argv)
 			cs = t[0] == 'u' ? CS_UTF8 : t[0] == 'l' ? CS_LATIN1 :
 				t[0] == 'c' ? CS_CP437 : CS_AUTO;
 		} else if (t[1] == 'f' && i + 1 < argc)
-			fontfile = argv[++i];
-		else if (t[1] == 'V') {
+			fontname = argv[++i];
+		else if (t[1] == 'w')
+			bord = 1;
+		else if (t[1] == 'g' && i + 1 < argc) {
+			if (!getsize(argv[++i], &wc, &wr))
+				usage();
+		} else if (t[1] == 'V') {
 			printf("%s %s\n", prog, VERSION);
 			return 0;
 		} else
@@ -1245,8 +1445,32 @@ int main(int argc, char **argv)
 	signal(SIGTERM, bye);
 	vt_init();
 	vt.charset = cs;
-	if (!tty && r_init(fontfile) == 0 && d_open() == 0)
+	if (!tty && loadfont(fontname) < 0) {
+		fprintf(stderr, "%s: no font %s\n", prog, fontname);
+		exit(2);
+	}
+	if (!tty && d_open(h ? (char *)0 : ask, (int)sizeof ask) == 0) {
 		win = 1;
+		if (!h) {		/* from the host box: host [port] */
+			char *s = ask;
+
+			while (*s == ' ')
+				s++;
+			if (*s) {
+				h = s;
+				while (*s && *s != ' ')
+					s++;
+				while (*s == ' ')
+					*s++ = 0;
+				if (*s) {
+					p = s;
+					while (*s && *s != ' ')
+						s++;
+					*s = 0;
+				}
+			}
+		}
+	}
 	else {
 		win = 0;
 		t_open();
@@ -1266,6 +1490,7 @@ int main(int argc, char **argv)
 		}
 	}
 	if (win) {
+		shape(wc, wr);
 		d_title("TelnetU");
 		r_draw(1);
 	}

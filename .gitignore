@@ -1,0 +1,4 @@
+tnsim
+tnsim.dSYM/
+*.o
+/telnetu
