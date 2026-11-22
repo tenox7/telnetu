@@ -1,0 +1,4 @@
+Name=TelnetU - VT100/UTF-8 Terminal
+Default=Open
+Open=SH -wd /usr/ethernet/admin/winexec.sh TELNET /usr/bin/telnetu
+Help=EXEC -d /usr/bin/uahelp -h /usr/lib/ua/telnetu.hlp -t "TelnetU"

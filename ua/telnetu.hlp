@@ -1,0 +1,63 @@
+Wlabel = "TelnetU Help"
+Contents = TelnetU,TelnetU Keys,TelnetU Commands
+Name = TelnetU
+Llabel = " TELNETU"
+Slabel = "TELNETU"
+Branch = TelnetU Keys,TelnetU Commands
+Title = "TelnetU - VT100/UTF-8 Terminal"
+Text =
+TelnetU logs you in to another computer on the network, as \
+telnet does, but it has a terminal of its own: a VT100 and \
+xterm, with UTF-8. Box lines, blocks, accents, Greek and \
+Cyrillic letters, and the art of BBSes (CP437) come out right. \
+So today's telnet hosts look as they should: BBSes, MUDs, \
+nethack.alt.org, telehack.com, mapscii.me.
+
+Type the name or the address of the host, then press Enter. \
+Press Cmd for the list of known hosts. Names that are not in \
+/etc/hosts are looked up with DNS. With no name, you get the \
+telnet> prompt.
+
+TelnetU opens a window of its own: 80 columns by 24 lines. \
+When you leave it, you come back here.
+
+In a UNIX System window, type: telnetu host [port]. \
+The old telnet is still there: telnet host. \EOT\
+
+Name = TelnetU Keys
+Llabel = " TELNETU  KEYS"
+Slabel = "  KEYS"
+Branch = TelnetU,TelnetU Commands
+Title = "TelnetU Keys"
+Text =
+Exit gives the telnet> prompt at the bottom of the window. \
+There, Return takes you back to the host, and Exit again \
+closes the connection and the window.
+
+^] does the same as Exit. So does ~ at the start of a line: \
+~quit closes the connection, and ~~ sends one ~.
+
+Help lists the telnet> commands. Rfrsh draws the screen again. \
+Break sends a telnet BREAK to the host.
+
+The arrow keys, Page, Shift-Page, Home, End and F1 to F8 go to \
+the host. Shift-F1 to Shift-F8 are F9 to F16. \
+A mouse click goes to hosts that ask for the mouse. \EOT\
+
+Name = TelnetU Commands
+Llabel = " TELNETUCOMMANDS"
+Slabel = "COMMANDS"
+Branch = TelnetU,TelnetU Keys
+Title = "TelnetU Commands"
+Text =
+At the telnet> prompt, type a command and press Return:
+
+open host [port]   connect to a host
+close              close the connection
+quit               close it and leave TelnetU
+z                  a UNIX shell (type exit to come back)
+send x             ayt brk ip ao ec el eof nop escape
+charset c          auto utf8 latin1 cp437
+term types         the terminal types to give the host
+status             what is going on
+?                  all the commands \EOT\

@@ -1,0 +1,6 @@
+# mk3b1 - build telnetu on the AT&T UNIX PC (3B1): sh mk3b1
+# The old binary goes first: written over in place, a program that ran
+# before can come back from stale pages and crash ("Memory fault").
+rm -f telnetu
+gcc -O -DSYSTEM5 -DSHORT_IDENT -I/usr/ethernet/include -o telnetu \
+	telnet.c vt.c glyph.c w3b1.c ttyb.c net.c -lnet -shlib
