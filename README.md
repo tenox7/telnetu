@@ -9,6 +9,15 @@ Full screen, or in windows that you move and resize.
 
 It runs on a real 3B1 and in [FreeBee](https://github.com/tenox7/freebee).
 The old TWG telnet (1986) stays /usr/bin/telnet.
+
+![The Office and the TelnetU menu](screenshots/office-menu.png)
+
+![A window with a border, in the small font](screenshots/window-small.png)
+
+![BBS art in CP437](screenshots/bbs-art.png)
+
+![All of the screen, in the narrow font: 144 x 28](screenshots/narrow-font.png)
+
 More pictures: [screenshots](screenshots).
 
 ## Use
