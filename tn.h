@@ -142,7 +142,7 @@ extern int mx, my, mb;		/* the last click: cell, button 0 1 2 */
 int tty_open(void);
 void tty_raw(int raw);
 void tty_close(void);
-int tty_key(int wait);		/* a byte, K_RESIZE or -1 */
+int tty_key(int wait);		/* a byte, K_RESIZE, K_CLOSE (end) or -1 */
 int tty_size(int *cols, int *rows);	/* 0 if the terminal knows its size */
 void tty_write(char *s, int n);
 

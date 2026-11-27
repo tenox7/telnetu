@@ -8,6 +8,7 @@
  */
 #include <stdio.h>
 #include <signal.h>
+#include <errno.h>
 #ifdef __APPLE__
 #include <termios.h>
 #include <unistd.h>
@@ -143,6 +144,11 @@ int tty_key(int wait)
 		return K_RESIZE;
 	}
 #endif
+	/* the input has ended: a file or a pipe at its end (on a terminal, 0
+	 * is only the time out), or a terminal that hung up. Quit, as the
+	 * old telnet does, and do not read the end again and again. */
+	if ((r == 0 && !saved) || (r < 0 && errno == EIO))
+		return K_CLOSE;
 	return r == 1 ? c : -1;
 }
 
