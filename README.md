@@ -8,7 +8,8 @@ Full screen, or in windows that you move and resize.
 ![mapscii.me, htop on Alpine Linux and the telehack.com aquarium, all at once](screenshots/htop-mapscii-aquarium.png)
 
 It runs on a real 3B1 and in [FreeBee](https://github.com/tenox7/freebee).
-The old TWG telnet (1986) stays /usr/bin/telnet.
+The old TWG telnet (1986) stays /usr/bin/telnet. It also runs on the
+AT&T 3B2, in a DMD 5620 layers window: see below.
 
 ![The Office and the TelnetU menu](screenshots/office-menu.png)
 
@@ -36,7 +37,7 @@ and Alt+Backspace is Cancl.
 
 - [Releases](https://github.com/tenox7/telnetu/releases):
   tenox_3b1_telnetu.tar.lz, the 3B1 program with its Office files and
-  this source.
+  this source. tenox_3b2_telnetu.tar.lz, the 3B2 program and this source.
 - A whole 3B1 for macOS, Linux and Windows with telnetu installed:
   [att3b1-unix351-freebee.tar.lz](https://files.42718.net/mirror/tenox/os/att/3b1/virt/att3b1-unix351-freebee.tar.lz)
 
@@ -61,6 +62,20 @@ On the 3B1, with gcc 2.5.8 (the FreeBee kit has it):
 
     PATH=/usr/local/bin:$PATH; export PATH
     sh mk3b1
+
+## AT&T 3B2 and the DMD 5620
+
+telnetu also runs on the 3B2 (UNIX System V Release 3.2 with WIN/3B), as a
+plain terminal, for example in a DMD 5620 layers window. The host gets
+the window's size, and a new size when you reshape the window. The
+terminal type is $TERM (dmd in layers): a host with the att5620 terminfo
+entry can run full screen programs. Install it as root:
+
+    cp bin/telnetu /usr/bin/telnetu; chmod 755 /usr/bin/telnetu
+
+Build it with gcc (/usr/gnu/bin):
+
+    sh mk3b2
 
 ## License
 

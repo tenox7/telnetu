@@ -3,7 +3,8 @@
  * telnet.c  the program: options, the telnet protocol, keys, commands
  * vt.c      the terminal: VT100/VT220/xterm codes, UTF-8, CP437, colours
  * glyph.c   the letters and the lines, drawn into a bitmap of the window
- * w3b1.c    the 3B1 window (or wsim.c, a stand-in for tests on a Mac)
+ * w3b1.c    the 3B1 window (or wsim.c, a stand-in for tests on a Mac,
+ *           or wnone.c, no window: the 3B2)
  * ttyb.c    a plain terminal (serial port, rlogin, telnet): no emulation
  * net.c     TCP and DNS
  */
@@ -138,11 +139,12 @@ int d_shell(void);		/* a local shell in a window of its own */
 extern int mx, my, mb;		/* the last click: cell, button 0 1 2 */
 
 /* the plain terminal: ttyb.c */
-int t_open(void);
-void t_raw(int raw);
-void t_close(void);
-int t_key(int wait);
-void t_write(char *s, int n);
+int tty_open(void);
+void tty_raw(int raw);
+void tty_close(void);
+int tty_key(int wait);		/* a byte, K_RESIZE or -1 */
+int tty_size(int *cols, int *rows);	/* 0 if the terminal knows its size */
+void tty_write(char *s, int n);
 
 /* net.c */
 int n_open(char *host, int port, char *err, char *addr);

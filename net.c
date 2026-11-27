@@ -12,7 +12,12 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#ifdef u3b2
+#include <sys/in.h>		/* WIN/3B on the 3B2 */
+#include <sys/inet.h>		/* its errno names */
+#else
 #include <netinet/in.h>
+#endif
 #include <netdb.h>
 #ifdef __APPLE__
 #include <string.h>

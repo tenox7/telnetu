@@ -1,0 +1,6 @@
+# mk3b2 - build telnetu on the AT&T 3B2 (SVR3.2, WIN/3B): sh mk3b2
+# No window here: it runs as a plain terminal, for example in a DMD 5620
+# layers window, which gives the host its size.
+rm -f telnetu
+PATH=/usr/gnu/bin:$PATH
+gcc -O -DNOWIN -o telnetu telnet.c vt.c glyph.c wnone.c ttyb.c net.c -lnet -lnsl_s

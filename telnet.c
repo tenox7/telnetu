@@ -67,6 +67,7 @@ static int net = -1;		/* the connection */
 static char host[80], addr[40];
 static int port = 23;
 static int win;			/* the window and its terminal; else tty */
+static int tcols = 80, trows = 24;	/* the tty's size (NAWS) */
 static int bord;		/* the window has a border (-w) */
 static char *fontname = "system";
 static Vt saved;		/* the host's screen, under the telnet> prompt */
@@ -223,9 +224,9 @@ static void naws(void)
 	nputc(SB);
 	nputc(O_NAWS);
 	nputc(0);
-	nputc(COLS);
+	nputc(win ? COLS : tcols);
 	nputc(0);
-	nputc(ROWS);
+	nputc(win ? ROWS : trows);
 	nputc(IAC);
 	nputc(SE);
 }
@@ -485,7 +486,7 @@ static void out(unsigned char *s, int n)
 	if (win)
 		vt_write(s, n);
 	else
-		t_write((char *)s, n);
+		tty_write((char *)s, n);
 }
 
 static void puts2(char *s)
@@ -505,13 +506,31 @@ static void note(char *s)
 		r_draw(0);
 }
 
+/* the tty's size, if it knows it; the host gets a new one */
+static void ttysize(void)
+{
+	int c, r;
+
+	if (tty_size(&c, &r) < 0 || (c == tcols && r == trows))
+		return;
+	tcols = c;
+	trows = r;
+	if (net >= 0 && us[O_NAWS] == YES) {
+		naws();
+		nflush();
+	}
+}
+
 /* a key, or -1; wait: wait for one at most 0.1 s */
 static int key(int wait)
 {
 	int k;
 
-	if (!win)
-		return t_key(wait);
+	if (!win) {
+		while ((k = tty_key(wait)) == K_RESIZE)	/* a layers reshape */
+			ttysize();
+		return k;
+	}
 	while ((k = d_key(wait)) == K_RESIZE)	/* the user resized it */
 		newsize(d_cols, d_rows);
 	return k;
@@ -649,7 +668,7 @@ static void linekey(int k)
 			vt_write(&u, 1);
 			r_draw(0);
 		} else
-			t_write(&c, 1);
+			tty_write(&c, 1);
 	}
 }
 
@@ -1065,10 +1084,10 @@ static int command(char *s)
 		if (win)
 			d_shell();
 		else {
-			t_close();
+			tty_close();
 			note("Type exit to come back.\r\n");
 			system("${SHELL:-/bin/sh}");
-			t_open();
+			tty_open();
 		}
 		return 1;
 	}
@@ -1181,7 +1200,7 @@ static void restore(void)
 	char buf[120];
 
 	if (!win) {
-		t_raw(1);
+		tty_raw(1);
 		return;
 	}
 	vt = saved;
@@ -1223,7 +1242,7 @@ static void cmdmode(int fromkey)
 			"back to the host. Exit: quit" : "telnet> commands (? lists "
 			"them), such as: open host. Exit: quit");
 	} else
-		t_raw(1);
+		tty_raw(1);
 	if (vt.x > 0 || !win)
 		note("\r\n");
 	if (fromkey == 2)
@@ -1365,7 +1384,7 @@ static void bye(int sig)
 	if (win)
 		d_close();
 	else
-		t_close();
+		tty_close();
 	exit(sig ? 1 : 0);
 }
 
@@ -1440,6 +1459,9 @@ int main(int argc, char **argv)
 	if (i < argc)
 		usage();
 
+#ifdef NOWIN
+	tty = 1;		/* no window here: wnone.c */
+#endif
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGHUP, bye);
 	signal(SIGTERM, bye);
@@ -1473,7 +1495,8 @@ int main(int argc, char **argv)
 	}
 	else {
 		win = 0;
-		t_open();
+		tty_open();
+		ttysize();
 		if (!ttypes[0] || (ntt == 2 && ttypes[0][0] == 'X')) {
 			/* no emulation: give the host this terminal's type */
 			static char tt[40];

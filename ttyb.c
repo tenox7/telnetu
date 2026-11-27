@@ -3,23 +3,71 @@
  * host's output goes to the terminal as it comes, as with the old telnet.
  * With -a (charset ascii) UTF-8 becomes ASCII, for terminals that do not
  * know it: lines become + - |, letters lose their accents.
+ * The host gets the terminal's size if the terminal knows it, as a DMD
+ * 5620 layers window does on the 3B2, and again when it is reshaped.
  */
 #include <stdio.h>
+#include <signal.h>
 #ifdef __APPLE__
 #include <termios.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #define termio termios
 #define TGET(t) tcgetattr(0, t)
 #define TSET(t) tcsetattr(0, TCSADRAIN, t)
 #else
 #include <termio.h>
 #define TGET(t) ioctl(0, TCGETA, t)
+#ifdef u3b2
+#define TSET(t) ioctl(0, TCSETA, t)	/* TCSETAW can hang a layers window */
+#else
 #define TSET(t) ioctl(0, TCSETAW, t)
+#endif
+#ifdef u3b2
+#include <sys/jioctl.h>		/* a DMD 5620 layers window: JWINSIZE */
+#undef VERSION			/* sys/sccsid.h has one */
+#endif
 #endif
 #include "tn.h"
 
 static struct termio tsave;
 static int saved, raw = -1, twait = -1;
+
+/* the terminal has a new size: a layers window was reshaped */
+#if defined(JWINSIZE) || defined(__APPLE__)
+#define WINCH
+static int winch;
+
+static void onwinch(int sig)
+{
+	signal(SIGWINCH, onwinch);
+	winch = 1;
+}
+#endif
+
+/* the size of the terminal, if it knows it */
+int tty_size(int *cols, int *rows)
+{
+#ifdef JWINSIZE
+	struct jwinsize w;
+
+	if (ioctl(0, JWINSIZE, &w) == 0 && w.bytesx > 0 && w.bytesy > 0) {
+		*cols = w.bytesx & 0377;
+		*rows = w.bytesy & 0377;
+		return 0;
+	}
+#endif
+#ifdef __APPLE__			/* wsim.c tests */
+	struct winsize w;
+
+	if (ioctl(0, TIOCGWINSZ, &w) == 0 && w.ws_col > 0 && w.ws_row > 0) {
+		*cols = w.ws_col;
+		*rows = w.ws_row;
+		return 0;
+	}
+#endif
+	return -1;
+}
 
 static void set(int r, int wait)
 {
@@ -40,33 +88,62 @@ static void set(int r, int wait)
 	twait = wait;
 }
 
-int t_open(void)
+int tty_open(void)
 {
 	if (TGET(&tsave) == 0)
 		saved = 1;
 	raw = twait = -1;
 	set(1, 0);
+#ifdef WINCH
+	signal(SIGWINCH, onwinch);
+#endif
 	return 0;
 }
 
-void t_raw(int r)
+void tty_raw(int r)
 {
 	set(r, twait < 0 ? 0 : twait);
 }
 
-void t_close(void)
+void tty_close(void)
 {
 	set(0, 0);
 }
 
-int t_key(int wait)
+int tty_key(int wait)
 {
 	unsigned char c;
+	int r;
+#ifdef JWINSIZE
+	static long last;
+	static int lc, lr;
+	int nc, nr;
 
+	/* the xt driver of SVR3.2 sends no SIGWINCH: look once a second */
+	if (n_ms() - last >= 1000) {
+		last = n_ms();
+		if (tty_size(&nc, &nr) == 0 && (nc != lc || nr != lr)) {
+			lc = nc;
+			lr = nr;
+			return K_RESIZE;
+		}
+	}
+#endif
+#ifdef WINCH
+	if (winch) {
+		winch = 0;
+		return K_RESIZE;
+	}
+#endif
 	set(1, wait);
-	if (read(0, (char *)&c, 1) != 1)
-		return -1;
-	return c;
+	r = read(0, (char *)&c, 1);
+#ifdef WINCH
+	if (winch) {			/* it came while we read */
+		winch = 0;
+		return K_RESIZE;
+	}
+#endif
+	return r == 1 ? c : -1;
 }
 
 static void put(char *s, int n)
@@ -159,7 +236,7 @@ static void ascii(unsigned char *s, int n)
 	put(out, k);
 }
 
-void t_write(char *s, int n)
+void tty_write(char *s, int n)
 {
 	if (vt.charset == CS_ASCII)
 		ascii((unsigned char *)s, n);
